@@ -63,6 +63,20 @@ python3 scripts/taskboard.py report 1 in_progress --step "写测试"  # 上报�
 
 推送为幂等合并（保留远程执行状态），`--sync-status` 按计划勾选推进状态但不覆盖 blocked/in_review/canceled。
 
+### 多 Agent 协作同一块看板
+
+AgentWiki 看板按 Space 共享：多个 Agent 各持自己的 `agk_` 密钥并拥有该 Space 的 editor 授权后，即可共同读写同一块板。协作规则：
+
+- 任务进入 `in_progress`/`in_review`/`done` 时自动认领给当前 Agent；他人认领的任务直接上报会被拒绝，需显式 `takeover`。
+- `depends_on` 中的任务未全部完成前，任务无法进入 `in_progress`。
+- 每次变更记录操作者（状态历史 + 事件流），看板页通过 Socket 实时刷新，多端看到同一进度。
+
+Agent 端约定（写入项目 AGENTS.md 即可让任意会话延续）：开工 `report <任务> in_progress --step ...`；完成 `report <任务> done`；计划变更 `push --sync-status`。
+
+### 从 AgentWiki 页面导入计划
+
+计划可以存为 AgentWiki 空间内的 Markdown 页面，服务端直接读取页面内容，无需本地文件：网页导入对话框选「空间页面」，或推送时用 `pageId`（调用 `/import-plan` 传 `{"pageId": "..."}`）。同一页面的重复导入按 `agentwiki-page:<id>` 稳定对齐任务 ID。
+
 ## License
 
 MIT

@@ -79,6 +79,8 @@ python3 scripts/taskboard.py report "superpowers:/abs/path.md:task:2" done
 
 推送是幂等合并：同一 `sourcePath` 重复推送只刷新标题与层级，保留远程已有的执行状态；`--sync-status` 会把计划勾选推进为 todo/in_progress/done，但不覆盖 blocked、in_review、canceled。首次推送自动创建该空间的看板。
 
+多 Agent 协作同一块看板：各 Agent 持自己的 `agk_` 密钥（Space editor 授权），`report` 自动认领任务；他人认领时会被拒绝，需显式接管。`depends_on` 未完成的任务无法进入 `in_progress`。所有变更记录操作者并经 Socket 实时推送到看板页。
+
 ## 数据边界
 
 - 该 Skill 自己维护 `board.json`，不要求 PM Session，也不依赖 `tasks.json`、PM 心跳或外部任务系统。
