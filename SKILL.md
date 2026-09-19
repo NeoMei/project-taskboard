@@ -57,6 +57,28 @@ description: Create, serve, validate, and update a local hierarchical project ta
 
 状态从 `todo` 改为 `in_progress` 时，如果没有开始时间，接口自动登记 `started_at`；状态改为 `done` 时，如果没有结束时间，接口自动登记 `completed_at`。显式提供的真实时间会被保留。每次状态变化会追加到 `status_history`，并原子写回 `board.json`。
 
+## AgentWiki 远程同步
+
+任务看板可以整体托管到 AgentWiki 服务端（每个 Space 一块看板，网页端有可视化看板页）。本地计划与远程看板的同步由两条命令完成，凭据来自环境变量：
+
+- `AGENTWIKI_URL`：AgentWiki 服务地址（如 https://agentwiki.quukk.com）
+- `AGENTWIKI_SPACE_ID`：目标空间 ID（看板页 URL `/spaces/<id>/taskboard` 中获取）
+- `AGENTWIKI_AGENT_KEY`：`agk_`/`awk_` API 密钥（Agent 需要该 Space 的 editor 授权）
+
+```bash
+# 推送项目下全部计划（docs/superpowers/plans/*.md）到 AgentWiki
+python3 scripts/taskboard.py push --project-root .
+
+# 仅推送单个计划，并按勾选同步状态
+python3 scripts/taskboard.py push --plan docs/superpowers/plans/login.md --sync-status
+
+# Agent 执行时上报状态（任务引用支持任务 ID、external_id 或 task 序号）
+python3 scripts/taskboard.py report 1 in_progress --step "写失败测试"
+python3 scripts/taskboard.py report "superpowers:/abs/path.md:task:2" done
+```
+
+推送是幂等合并：同一 `sourcePath` 重复推送只刷新标题与层级，保留远程已有的执行状态；`--sync-status` 会把计划勾选推进为 todo/in_progress/done，但不覆盖 blocked、in_review、canceled。首次推送自动创建该空间的看板。
+
 ## 数据边界
 
 - 该 Skill 自己维护 `board.json`，不要求 PM Session，也不依赖 `tasks.json`、PM 心跳或外部任务系统。

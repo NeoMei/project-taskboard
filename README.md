@@ -48,6 +48,21 @@ python3 scripts/taskboard.py start   --root ./project-dashboard   --project-root
 
 ---
 
+## 同步到 AgentWiki 服务端
+
+看板可以整体托管到 AgentWiki（每个 Space 一块看板，网页端提供可视化任务看板）。配置环境变量后两条命令完成同步：
+
+```bash
+export AGENTWIKI_URL="https://agentwiki.quukk.com"
+export AGENTWIKI_SPACE_ID="<空间 ID>"
+export AGENTWIKI_AGENT_KEY="agk_..."   # Agent 密钥（需该 Space 的 editor 授权）
+
+python3 scripts/taskboard.py push --project-root .                 # 推送全部计划
+python3 scripts/taskboard.py report 1 in_progress --step "写测试"  # 上报状态
+```
+
+推送为幂等合并（保留远程执行状态），`--sync-status` 按计划勾选推进状态但不覆盖 blocked/in_review/canceled。
+
 ## License
 
 MIT

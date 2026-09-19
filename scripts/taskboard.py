@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
@@ -709,6 +709,99 @@ def cmd_start(args):
     raise RuntimeError(f"任务看板服务未就绪，请检查 {root / 'taskboard-server.log'}")
 
 
+def agentwiki_config(server: str | None, space: str | None, key: str | None) -> dict:
+    resolved = {
+        "server": (server or os.environ.get("AGENTWIKI_URL") or "").rstrip("/"),
+        "space": space or os.environ.get("AGENTWIKI_SPACE_ID") or "",
+        "key": key or os.environ.get("AGENTWIKI_AGENT_KEY") or os.environ.get("AGENTWIKI_API_KEY") or "",
+    }
+    missing = [name for name, value in (
+        ("--server / AGENTWIKI_URL", resolved["server"]),
+        ("--space / AGENTWIKI_SPACE_ID", resolved["space"]),
+        ("--key / AGENTWIKI_AGENT_KEY", resolved["key"]),
+    ) if not value]
+    if missing:
+        raise RuntimeError("缺少 AgentWiki 配置：" + "、".join(missing))
+    return resolved
+
+
+def agentwiki_import_payload(content: str, source_path: str, sync_status: bool = False, project: str | None = None) -> dict:
+    payload = {"content": content, "sourcePath": source_path, "syncStatus": sync_status}
+    if project:
+        payload["project"] = project
+    return payload
+
+
+def resolve_agentwiki_task(tasks: list, ref: str) -> dict:
+    if not ref:
+        raise RuntimeError("任务引用不能为空")
+    for task in tasks:
+        if task.get("id") == ref:
+            return task
+    for task in tasks:
+        if task.get("external_id") == ref:
+            return task
+    if ref.startswith(":") or ":" in ref:
+        suffix = ref if ref.startswith(":") else f":{ref}"
+    elif ref.isdigit():
+        suffix = f":task:{ref}"
+    else:
+        raise RuntimeError(f"未找到任务：{ref}")
+    matched = [task for task in tasks if isinstance(task.get("external_id"), str) and task["external_id"].endswith(suffix)]
+    if len(matched) == 1:
+        return matched[0]
+    if len(matched) > 1:
+        raise RuntimeError(f"任务引用不唯一：{ref}（{len(matched)} 个匹配，请使用完整任务 ID）")
+    raise RuntimeError(f"未找到任务：{ref}")
+
+
+def agentwiki_request(server: str, space: str, key: str, path: str, payload: dict | None = None) -> dict:
+    url = f"{server}/api/spaces/{space}/taskboard{path}"
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json; charset=utf-8"}
+    data = json_bytes(payload) if payload is not None else None
+    request = Request(url, data=data, headers=headers, method="POST" if data is not None else "GET")
+    try:
+        with urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"AgentWiki HTTP {exc.code}：{detail}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"AgentWiki 连接失败：{exc.reason}") from exc
+
+
+def cmd_push(args):
+    config = agentwiki_config(args.server, args.space, args.key)
+    project_root = args.project_root.expanduser().resolve() if args.project_root else Path.cwd()
+    plans = [args.plan.expanduser().resolve()] if args.plan else discover_superpowers_plans(project_root)
+    if not plans:
+        raise RuntimeError(f"未找到 Superpowers 计划：{project_root / 'docs' / 'superpowers' / 'plans'}")
+    for plan in plans:
+        payload = agentwiki_import_payload(plan.read_text(encoding="utf-8"), str(plan), args.sync_status, args.project)
+        result = agentwiki_request(config["server"], config["space"], config["key"], "/import-plan", payload)
+        summary = result.get("summary") or {}
+        print(f"已推送 {plan.name}：新增 {summary.get('added', 0)} · 更新 {summary.get('updated', 0)}")
+
+
+def cmd_report(args):
+    if args.status is None and args.step is None:
+        raise RuntimeError("请至少提供 status 或 --step")
+    if args.status is not None and args.status not in STATUSES:
+        raise RuntimeError(f"不支持的状态：{args.status}")
+    config = agentwiki_config(args.server, args.space, args.key)
+    board = agentwiki_request(config["server"], config["space"], config["key"], "").get("board", {})
+    task = resolve_agentwiki_task(board.get("tasks", []), args.task_ref)
+    payload = {}
+    if args.status is not None:
+        payload["status"] = args.status
+    if args.step is not None:
+        payload["current_step"] = args.step
+    result = agentwiki_request(config["server"], config["space"], config["key"], f"/tasks/{task['id']}/status", payload)
+    updated = result.get("task", {})
+    step = f"（{updated.get('current_step')}）" if updated.get("current_step") else ""
+    print(f"已上报：{updated.get('title', task.get('title'))} → {updated.get('status')}{step}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -749,6 +842,23 @@ def main():
         a.project_root.expanduser().resolve() if a.project_root else None,
         a.watch_interval,
     ))
+    push = sub.add_parser("push", help="推送项目 Superpowers 计划到 AgentWiki 任务看板")
+    push.add_argument("--project-root", type=Path, help="项目根目录（默认当前目录）")
+    push.add_argument("--plan", type=Path, help="仅推送指定计划文件")
+    push.add_argument("--project", help="覆盖看板项目名")
+    push.add_argument("--sync-status", action="store_true", help="按计划勾选同步任务状态")
+    push.add_argument("--server", help="AgentWiki 服务地址（默认环境变量 AGENTWIKI_URL）")
+    push.add_argument("--space", help="AgentWiki 空间 ID（默认环境变量 AGENTWIKI_SPACE_ID）")
+    push.add_argument("--key", help="AgentWiki API 密钥（默认环境变量 AGENTWIKI_AGENT_KEY）")
+    push.set_defaults(func=cmd_push)
+    report = sub.add_parser("report", help="向 AgentWiki 看板上报任务状态与当前步骤")
+    report.add_argument("task_ref", help="任务 ID / external_id / task 序号（如 task:1 或 1）")
+    report.add_argument("status", nargs="?", choices=sorted(STATUSES))
+    report.add_argument("--step", help="更新当前步骤")
+    report.add_argument("--server", help="AgentWiki 服务地址（默认环境变量 AGENTWIKI_URL）")
+    report.add_argument("--space", help="AgentWiki 空间 ID（默认环境变量 AGENTWIKI_SPACE_ID）")
+    report.add_argument("--key", help="AgentWiki API 密钥（默认环境变量 AGENTWIKI_AGENT_KEY）")
+    report.set_defaults(func=cmd_report)
     args = parser.parse_args()
     try:
         args.func(args)
