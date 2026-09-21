@@ -9,6 +9,8 @@ description: Create, serve, validate, and update a local hierarchical project ta
 
 本 Skill 是运行时无关的：看板服务只依赖 Python 3 标准库和 HTTP，项目可以由 Codex、OpenCode 或其他能执行 shell/HTTP 请求的 agent 共同更新。PM Session 是可选的协调者，不是看板的前置条件。每个运行时只需要把本 Skill 安装到自己的 Skill 发现目录，所有 agent 再通过同一个项目看板 URL 写入同一份任务数据。
 
+节点树不假定固定层数。画布根据 `parent_id` 的实际路径动态生成层级列；点击有子节点的卡片继续展开，面包屑可以回到任意祖先，叶节点显示为不可继续展开。深层路径会自动获得更宽的可滚动画布，避免把第 4 层、第 5 层或更深层级压缩到固定布局中。
+
 ## 标准流程
 
 1. 选择一个专用看板目录，不要直接覆盖已有项目目录。初始化空看板：
