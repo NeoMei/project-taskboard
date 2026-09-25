@@ -2,6 +2,8 @@ import importlib.util
 import json
 import subprocess
 import time
+
+import pytest
 from urllib.request import urlopen
 from argparse import Namespace
 from pathlib import Path
@@ -149,11 +151,13 @@ def test_project_sync_follows_superpowers_checkbox_changes(tmp_path):
     assert execution_task["completed_at"]
 
 
-def test_serve_watches_plan_file_without_manual_task_creation(tmp_path):
+@pytest.mark.parametrize("start_without_plan", [False, True])
+def test_serve_watches_plan_file_without_manual_task_creation(tmp_path, start_without_plan):
     plans_dir = tmp_path / "docs" / "superpowers" / "plans"
     plans_dir.mkdir(parents=True)
     plan_path = plans_dir / "2026-09-20-auth.md"
-    plan_path.write_text(PLAN, encoding="utf-8")
+    if not start_without_plan:
+        plan_path.write_text(PLAN, encoding="utf-8")
     board_root = tmp_path / "board"
     taskboard.cmd_init(Namespace(root=board_root, project=None, input=None, plan=None, project_root=tmp_path, force=False))
     process = subprocess.Popen([
@@ -174,8 +178,8 @@ def test_serve_watches_plan_file_without_manual_task_creation(tmp_path):
         while time.time() < deadline:
             with urlopen("http://127.0.0.1:47841/api/board", timeout=0.5) as response:
                 payload = json.loads(response.read())
-            task = next(task for task in payload["board"]["tasks"] if task["kind"] == "implementation_task")
-            status = task["status"]
+            task = next((task for task in payload["board"]["tasks"] if task["kind"] == "implementation_task"), None)
+            status = task["status"] if task else None
             if status == "done":
                 break
             time.sleep(0.2)
@@ -183,3 +187,32 @@ def test_serve_watches_plan_file_without_manual_task_creation(tmp_path):
     finally:
         process.terminate()
         process.wait(timeout=5)
+
+
+def test_empty_project_initializes_and_later_imports_plan(tmp_path):
+    board_root = tmp_path / "board"
+    taskboard.cmd_init(Namespace(root=board_root, project="New project", input=None, plan=None, project_root=tmp_path, force=False))
+    board = taskboard.load_board(board_root)
+    assert board["tasks"] == []
+    assert board["empty_reason"] == "no_superpowers_plans"
+    assert taskboard.validate_board(board_root)["task_count"] == 0
+    assert taskboard.sync_project_plans(board_root, tmp_path)["tasks"] == []
+
+    plans = tmp_path / "docs" / "superpowers" / "plans"
+    plans.mkdir(parents=True)
+    (plans / "account.md").write_text(PLAN, encoding="utf-8")
+    board = taskboard.sync_project_plans(board_root, tmp_path)
+    assert "empty_reason" not in board
+    assert len(board["tasks"]) == 7
+
+
+def test_missing_plans_preserve_existing_tasks(tmp_path):
+    board_root = tmp_path / "board"
+    taskboard.cmd_init(Namespace(root=board_root, project="Manual", input=None, plan=None, force=False))
+    board = taskboard.load_board(board_root)
+    task = taskboard.make_task({"title": "Existing task", "status": "in_progress"})
+    board["tasks"].append(task)
+    taskboard.write_atomic(board_root / "board.json", board)
+    synced = taskboard.sync_project_plans(board_root, tmp_path)
+    assert synced["tasks"] == [task]
+    assert "empty_reason" not in synced

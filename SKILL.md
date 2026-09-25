@@ -32,6 +32,8 @@ description: Create, serve, validate, and update a local hierarchical project ta
      --project "项目名称"
    ```
 
+   未发现 Superpowers 计划时仍生成并启动空看板，页面说明暂无规划和任务，不虚构示例任务，也不将空任务集合视为项目已完成。后续新增计划会自动同步；也可导入任务 JSON 或通过 API 添加任务。未指定项目目录的空看板显示通用的“暂无任务”说明。
+
 2. 校验并启动服务：
 
    ```bash

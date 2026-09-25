@@ -279,6 +279,7 @@ def _merge_plan_into_board(board: dict, incoming: dict, source_path: str, sync_s
             if current.get("status") != candidate.get("status"):
                 apply_patch(current, {"status": candidate["status"]})
         current["updated_at"] = iso_now()
+    board.pop("empty_reason", None)
     board["source_type"] = "superpowers_plan"
     board["sources"] = sorted(set(board.get("sources", [])) | set(incoming.get("sources", [])) | {source_path})
 
@@ -296,8 +297,6 @@ def merge_superpowers_plan(root: Path, text: str, source_path: str, sync_status:
 
 def build_board_from_project(project_root: Path, project: str | None = None) -> dict:
     plans = discover_superpowers_plans(project_root)
-    if not plans:
-        raise RuntimeError(f"未找到 Superpowers 计划：{project_root / 'docs' / 'superpowers' / 'plans'}")
     board = {
         "schema_version": 1,
         "project": project or project_root.name,
@@ -309,15 +308,20 @@ def build_board_from_project(project_root: Path, project: str | None = None) -> 
     for plan_path in plans:
         incoming = parse_superpowers_plan(plan_path.read_text(encoding="utf-8"), str(plan_path))
         _merge_plan_into_board(board, incoming, str(plan_path))
+    if not plans:
+        board["source_type"] = "empty"
+        board["empty_reason"] = "no_superpowers_plans"
     task_map(board)
     return board
 
 
 def sync_project_plans(root: Path, project_root: Path, project: str | None = None) -> dict:
     plans = discover_superpowers_plans(project_root)
-    if not plans:
-        raise RuntimeError(f"未找到 Superpowers 计划：{project_root / 'docs' / 'superpowers' / 'plans'}")
     board = load_board(root)
+    if not plans and not board["tasks"]:
+        board["empty_reason"] = "no_superpowers_plans"
+    elif board["tasks"]:
+        board.pop("empty_reason", None)
     for plan_path in plans:
         incoming = parse_superpowers_plan(plan_path.read_text(encoding="utf-8"), str(plan_path))
         _merge_plan_into_board(board, incoming, str(plan_path), sync_status=True)
