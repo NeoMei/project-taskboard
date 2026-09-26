@@ -11,7 +11,7 @@ description: Create, serve, validate, and update a local hierarchical project ta
 
 节点树不假定固定层数。画布根据 `parent_id` 的实际路径动态生成层级列；点击有子节点的卡片继续展开，面包屑可以回到任意祖先，叶节点显示为不可继续展开。深层路径会自动获得更宽的可滚动画布，避免把第 4 层、第 5 层或更深层级压缩到固定布局中。
 
-## 标准流程
+## 本地看板流程（远程同步见下文）
 
 1. 选择一个专用看板目录，不要直接覆盖已有项目目录。初始化空看板：
 
@@ -63,27 +63,27 @@ description: Create, serve, validate, and update a local hierarchical project ta
 
 ## AgentWiki 远程同步
 
-任务看板可以整体托管到 AgentWiki 服务端（每个 Space 一块看板，网页端有可视化看板页）。本地计划与远程看板的同步由两条命令完成，凭据来自环境变量：
+Agent 已连接 AgentWiki MCP 时，**优先复用现有 MCP 连接和授权身份**，不要要求用户另填服务器地址、导出密钥或设置 `AGENTWIKI_*`。Python 脚本不会自动继承宿主 MCP；由调用本 Skill 的 Agent 直接调用已发现的 MCP 工具。
 
-- `AGENTWIKI_URL`：AgentWiki 服务地址（如 https://agentwiki.quukk.com）
-- `AGENTWIKI_SPACE_ID`：目标空间 ID（看板页 URL `/spaces/<id>/taskboard` 中获取）
-- `AGENTWIKI_AGENT_KEY`：`agk_`/`awk_` API 密钥（Agent 需要该 Space 的 editor 授权）
+1. 发现 `list_spaces`、`get_taskboard`、`import_taskboard_plans`、`update_taskboard_status`（工具可能带宿主前缀；Local Sync 网关为 `wiki_*`）。始终遵循实际输入 schema：如果工具暴露 `__args`，把下述参数整体放入它，例如 `wiki_get_taskboard({__args:{spaceId}})`；直连 MCP 则直接传 `{spaceId}`。工具缺失时先刷新/重连 MCP；服务器须支持这些工具（AgentWiki v0.12.9+）。若仍缺失，说明兼容性阻塞，不虚构工具、不自动改走 HTTP 或索取密钥。
+2. 确定目标 Space：优先复用用户已确认的当前项目映射，并通过 `list_spaces` 校验；没有映射且只有一个可写 Space（editor/publisher）时使用它并告知。多个候选必须询问用户；只有 reader 时说明缺少写权限。项目映射只记录 MCP 连接标识与 `spaceId`，不记录密钥。
+3. 调用 `get_taskboard({spaceId})` 查看已有任务和来源。已有本地 `board.json` 时读取完整内容；否则扫描项目的 `docs/superpowers/plans/*.md`，读取每个文件的实际内容。不要把本地路径当上传数据，不要混合上传看板快照与它的原始计划而制造重复任务。
+4. 调用 `import_taskboard_plans({spaceId, documents:[{sourcePath,content}], syncStatus:false})`。一批最多 20 个文件，内容合计最多 2 MB（UTF-8）；超限分批。`sourcePath` 是稳定身份：优先沿用远程已有来源，首次用项目内稳定路径并让协作 Agent 复用，不能随工作树/机器改名。JSON 中任务 ID 也保持不变。
+5. 每个文件独立提交，检查每项 `results` 的 `status`、`summary` 或错误 `code`；部分失败会返回 `isError:true`，不等于全部回滚。只处理失败文件，按原 `sourcePath` 重试；遇到权限/网络错误先读取远程确认已写入部分，不能声称全批成功。导入后再次 `get_taskboard` 核对任务树。
+6. 执行时从远程读取**精确任务 ID**，调用 `update_taskboard_status({spaceId,taskId,status,current_step,expected_status,session_id})`。多计划中裸任务序号不唯一；`session_id` 在同一次执行中保持一致，`expected_status` 使用刚读到的状态。遇到认领/依赖/状态冲突先核对，不自动 `takeover:true`。需要时由用户明确决定接管。
+
+重复导入默认只合并规划字段，保留远程已有状态、负责人和时间；只有明确需要以计划勾选同步进度时才启用 `syncStatus:true`，且不会覆盖 blocked/in_review/canceled。导入或上报只在 Agent 调用工具时发生；本地文件监听不等于远程自动同步。写入以当前 MCP 身份记录审计，并推送到网页看板。
+
+### 无 MCP 时的独立 CLI
+
+仅在没有 MCP 且用户选择独立 HTTP 方式时，使用环境变量 `AGENTWIKI_URL`、`AGENTWIKI_SPACE_ID`、`AGENTWIKI_AGENT_KEY`（需目标 Space 的 editor/publisher 授权）。不要读取宿主 MCP 配置中的秘密来拼接命令。
 
 ```bash
-# 推送项目下全部计划（docs/superpowers/plans/*.md）到 AgentWiki
-python3 scripts/taskboard.py push --project-root .
-
-# 仅推送单个计划，并按勾选同步状态
-python3 scripts/taskboard.py push --plan docs/superpowers/plans/login.md --sync-status
-
-# Agent 执行时上报状态（任务引用支持任务 ID、external_id 或 task 序号）
-python3 scripts/taskboard.py report 1 in_progress --step "写失败测试"
-python3 scripts/taskboard.py report "superpowers:/abs/path.md:task:2" done
+python3 <project-taskboard-skill-dir>/scripts/taskboard.py push --project-root /绝对路径/项目目录
+python3 <project-taskboard-skill-dir>/scripts/taskboard.py report "superpowers:/abs/path.md:task:2" in_progress --step "写失败测试"
 ```
 
-推送是幂等合并：同一 `sourcePath` 重复推送只刷新标题与层级，保留远程已有的执行状态；`--sync-status` 会把计划勾选推进为 todo/in_progress/done，但不覆盖 blocked、in_review、canceled。首次推送自动创建该空间的看板。
-
-多 Agent 协作同一块看板：各 Agent 持自己的 `agk_` 密钥（Space editor 授权），`report` 自动认领任务；他人认领时会被拒绝，需显式接管。`depends_on` 未完成的任务无法进入 `in_progress`。所有变更记录操作者并经 Socket 实时推送到看板页。
+`push` 扫描全部标准计划，`--plan` 仅推一个文件，`--sync-status` 显式按勾选同步状态。独立 CLI 仍直接使用 HTTP，不具备宿主 MCP 的自动连接能力。
 
 ## 数据边界
 

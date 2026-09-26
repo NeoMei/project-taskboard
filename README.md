@@ -50,7 +50,11 @@ python3 scripts/taskboard.py start   --root ./project-dashboard   --project-root
 
 ## 同步到 AgentWiki 服务端
 
-看板可以整体托管到 AgentWiki（每个 Space 一块看板，网页端提供可视化任务看板）。配置环境变量后两条命令完成同步：
+看板可以整体托管到 AgentWiki（每个 Space 一块看板）。**已连接 AgentWiki MCP 的 Agent 无需重复配置服务器或密钥**：调用 `list_spaces` 选定项目 Space，以 `get_taskboard` 读取看板、`import_taskboard_plans` 批量导入本地文件内容、`update_taskboard_status` 上报状态。多个 Space 时先确定项目映射。需要 AgentWiki v0.12.9+，升级后刷新/重连 MCP 工具列表。
+
+批量导入每次最多 20 个文件 / 2 MB 内容，按文件提交并报告结果；失败项单独处理，默认保留远程状态。完整流程与稳定来源约定见 [SKILL.md](SKILL.md#agentwiki-远程同步)。
+
+只有不使用 MCP 的独立 CLI 才需要配置环境变量：
 
 ```bash
 export AGENTWIKI_URL="https://agentwiki.quukk.com"
@@ -71,7 +75,7 @@ AgentWiki 看板按 Space 共享：多个 Agent 各持自己的 `agk_` 密钥并
 - `depends_on` 中的任务未全部完成前，任务无法进入 `in_progress`。
 - 每次变更记录操作者（状态历史 + 事件流），看板页通过 Socket 实时刷新，多端看到同一进度。
 
-Agent 端约定（写入项目 AGENTS.md 即可让任意会话延续）：开工 `report <任务> in_progress --step ...`；完成 `report <任务> done`；计划变更 `push --sync-status`。
+Agent 端通过 MCP 上报执行状态；独立 CLI 使用 `report`。计划变更默认合并规划，只有明确要求按勾选同步进度时使用 `syncStatus:true` 或 `push --sync-status`。
 
 ### 从 AgentWiki 页面导入计划
 
